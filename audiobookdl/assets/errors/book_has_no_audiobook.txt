@@ -1,3 +1,0 @@
-[red]ERROR: Book has no audiobook[/red]
-
-Only audiobooks are supported.

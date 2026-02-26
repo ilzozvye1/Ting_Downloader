@@ -1,6 +1,0 @@
-[red]ERROR: Missing access to book[/red]
-
-Your don't have access to the book you are trying to download.
-
-[underline]Potential fixes[/underline]
- • Libraries: Loan the book

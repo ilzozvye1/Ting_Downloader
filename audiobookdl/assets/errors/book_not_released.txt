@@ -1,3 +1,0 @@
-[red]ERROR: Book is not released yet[/red]
-
-Your don't have access to the book you are trying to download because it's not yet released.

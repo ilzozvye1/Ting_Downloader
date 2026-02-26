@@ -1,141 +1,73 @@
-# audiobook-dl
-![GitHub release](https://img.shields.io/github/v/release/jo1gi/audiobook-dl)
-![GitHub top language](https://img.shields.io/github/languages/top/jo1gi/audiobook-dl)
-![License](https://img.shields.io/github/license/jo1gi/audiobook-dl)
-[![Donate using Ko-Fi](https://img.shields.io/badge/donate-kofi-00b9fe?logo=ko-fi&logoColor=00b9fe)](https://ko-fi.com/jo1gi)
+# 有声小说下载器（ting13）
 
-CLI tool for downloading audiobooks from online sources.
+用于下载 `ting13.cc` 与 `ting22.com / huanting.cc` 的有声书，支持命令行和图形界面。
 
-## Supported Services
-audiobook-dl currently supports downloading from the following sources:
-- [audiobooks.com](https://audiobooks.com)
-- [Blinkist](https://www.blinkist.com)
-- [Chirp](https://www.chirpbooks.com/)
-- [eReolen](https://ereolen.dk)
-- [Everand (previously Scribd)](https://everand.com)
-- [Librivox](https://librivox.org)
-- [Nextory](https://nextory.com)
-- [Overdrive](https://www.overdrive.com/)
-- [Podimo](https://podimo.com)
-- [Saxo](https://saxo.com)
-- [Storytel](https://www.storytel.com/) / [Mofibo](https://mofibo.com)
-- [YourCloudLibrary](https://www.yourcloudlibrary.com/)
+## 功能
 
-[More info](./supported_sites.md)
+- 支持整本下载与单集下载
+- 支持指定集数范围下载
+- 支持代理（手动或自动检测）
+- 支持 Clash 自动换 IP
+- 支持断点补集（跳过已下载，优先补缺失章节）
 
-## Installation
-audiobook-dl can be installed from the repo itself or through pip.
+## 目录结构
 
-To get the newest stable version with pip run:
-```shell
-pip install audiobook-dl
+- `ting13/cli.py`：命令行入口
+- `ting13/gui.py`：通用 GUI（v3）
+- `ting13/ting13_gui.py`：多任务 GUI（v4）
+- `ting13/ting13_downloader.py`：旧版兼容入口
+
+## 环境依赖
+
+推荐 Python 3.10+，并安装以下依赖：
+
+```bash
+pip install playwright requests lxml cssselect customtkinter
+playwright install chromium
 ```
 
-If you want to use the newest version (can be unstable) run:
-```shell
-pip install "git+https://github.com/jo1gi/audiobook-dl.git"
-```
-or
-```shell
-git clone https://github.com/jo1gi/audiobook-dl.git
-cd audiobook-dl
-python3 setup.py install
+## 快速开始
+
+### 命令行
+
+```bash
+python ting13/cli.py "https://www.ting13.cc/youshengxiaoshuo/10408/"
 ```
 
-Some features require [ffmpeg](https://ffmpeg.org/) which can be installed
-through most package managers or from [ffmpeg.org/download.html](https://ffmpeg.org/download.html).
+指定输出目录和范围：
 
-## Authentication
-
-### Cookies
-audiobook-dl uses Netscape cookie files for authentication in most cases. I use
-[this](https://github.com/rotemdan/ExportCookies) extension to export my cookies
-from the browser.
-
-Cookies can be placed in current dir as `cookies.txt` or be given with the
-`--cookie` argument.
-
-### Login
-[Some sources](./supported_sites.md) support authentication through login with
-username and password (and sometimes library). Use the `--username` and
-`--password` arguments or enter them through an interactive prompt.
-
-## Downloading audiobooks
-```shell
-audiobook-dl -c <cookie file> <url>
-```
-**Most sites require you to provide the listening page not not just the
-information page**
-
-## Arguments
-
-| Argument          | Value                                                             |
-|-------------------|-------------------------------------------------------------------|
-| url               | The url of the page where you listen to the audiobook             |
-| -c/--cookie       | Path to a Netscape cookie file                                    |
-| --combine         | Combine all output files into a single file (requires ffmpeg)     |
-| --cover           | Only download cover                                               |
-| -d/--debug        | Print debug information                                           |
-| -o/--output       | Output location                                                   |
-| --remove-chars    | List of characters that will be removed from output path          |
-| --no-chapters     | Don't include chapters in output file                             |
-| --output-format   | Output file format                                                |
-| --verbose-ffmpeg | Show ffmpeg output in terminal                                    |
-| --username        | Username to source (Required when using login)                    |
-| --password        | Password to source (Required when using login)                    |
-| --library         | Specific library on service (Sometimes required when using login) |
-
-## Output
-By default, audiobook-dl saves all audiobooks to `{title}` relative to the
-current path. This can be changed with the `--output` argument. Path can be
-customized by audiobook with the following fields:
-- `title`
-- `author`
-- `series`
-- `narrator`
-
-Not all fields are available for all audiobooks.
-
-The file extension can be changed with the `--output-format` argument.
-
-## Configuration
-audiobook-dl can be configured using a configuration file, which should be placed at:
-- Windows: `C:\\Users\\$user\\AppData\\Local\\jo1gi\\audiobook-dl\\audiobook-dl.toml`
-- Mac: `/Users/$user/Library/Application Support/audiobook-dl/audiobook-dl.toml`
-- Linux `$XDG_CONFIG_DIR/audiobook-dl/audiobook-dl.toml`
-
-### Authentications
-Source credentials can be provided in the configuration file:
-```toml
-[sources.yourcloudlibrary]
-username = "yourusername"
-password = "supersecretpassword"
-library = "hometown"
+```bash
+python ting13/cli.py -o "./downloads" --start 5 --end 10 "URL"
 ```
 
-Cookie files can be specified in a similar way:
-```toml
-[sources.everand]
-cookie_file = "./everand_cookies.txt"
+使用代理和自动换 IP：
+
+```bash
+python ting13/cli.py --proxy auto --rotate 30 "URL"
 ```
-Paths are relative to the configuration directory.
 
-## Contributions
-Issues, bug-reports, pull requests or ideas for features and improvements are
-**very welcome**.
+### 图形界面
 
-## Donations
-If you like the project, please consider donating:
-- [Ko-fi](https://ko-fi.com/jo1gi)
-- [Buy me a Coffee](https://www.buymeacoffee.com/joakimholm)
-<details>
-<summary>Cryptocurrencies</summary>
+```bash
+python ting13/ting13_gui.py
+```
 
-- Bitcoin: bc1qrh8hcnw0fd22y7rmljlmrztwrz2nd5tqckrt44
-- Bitcoin Cash: qp6rt9zx7tfyu9e4alxcn5yf4re5pfztvu8yx0rywh
-- Dash: XfgopGkj4BBpuzsUvrbj9jenXUZ6dXsr3J
-- Etherium: 0x8f5d2eb6d2a4d4615d2b9b1cfa28b4c5b9d18f9f
-- Litecoin: ltc1qfz2936a04m2h7t0srxftygjrq759auav7ndfd3
-- Monero: 853tLAbK5wQ93mdj884C31JGKBUEJCpM25gEjGGLnuVDc8PEDMJi6uC5Vcz9g37K2PeT8FY1bjEveUWqJXNPotFRLwLnn9a
+## CLI 参数
 
-</details>
+- `url`：书籍页或播放页 URL
+- `-o, --output`：输出目录（默认当前目录）
+- `--start`：起始集（默认 1）
+- `--end`：结束集（默认全部）
+- `--no-headless`：显示浏览器窗口
+- `--proxy`：代理地址，`auto` 为自动检测
+- `--rotate`：每 N 集通过 Clash API 自动换 IP
+
+## 使用说明
+
+- 建议优先使用书籍详情页 URL，单集链接也可下载
+- 首次运行前请确认 Playwright 浏览器已安装
+- 如遇访问限制，建议开启代理并适当提高换 IP 频率
+
+## 免责声明
+
+本项目仅用于学习与研究，请遵守目标网站的服务条款与当地法律法规。请勿用于未授权内容下载。

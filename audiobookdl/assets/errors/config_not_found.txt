@@ -1,1 +1,0 @@
-[red]ERROR: Specified config file does not exists[/red]

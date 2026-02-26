@@ -1,7 +1,0 @@
-query web_logInUser($email: String!, $password: String!) {
- tokenWithCredentials(email: $email, password: $password) {
-  token
-  isNewUser
-  __typename
-  }
-}
