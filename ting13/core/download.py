@@ -24,7 +24,7 @@ from .network import build_session, get_proxy, ClashRotator, random_ua
 from .utils import sanitize_filename
 
 if TYPE_CHECKING:
-    from sources.base import Source
+    from ting13.sources.base import Source
 
 
 # ══════════════════════════════════════════════════════════════

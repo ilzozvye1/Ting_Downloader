@@ -12,10 +12,19 @@
 
 ## 目录结构
 
-- `ting13/cli.py`：命令行入口
-- `ting13/gui.py`：通用 GUI（v3）
-- `ting13/ting13_gui.py`：多任务 GUI（v4）
-- `ting13/ting13_downloader.py`：旧版兼容入口
+- `ting13/apps/cli/main.py`：CLI 主入口
+- `ting13/apps/gui/main.py`：通用 GUI（v3）主入口
+- `ting13/apps/gui_v4/main.py`：多任务 GUI（v4）主入口
+- `ting13/core/`：核心引擎、网络、模型
+- `ting13/sources/`：站点插件
+- `ting13/workers/`：多进程 worker
+- `ting13/legacy/`：兼容模块（历史逻辑）
+- `ting13/packaging/`：打包脚本与 spec
+
+兼容入口（仍可用）：
+- `ting13/cli.py`
+- `ting13/gui.py`
+- `ting13/ting13_gui.py`
 
 ## 环境依赖
 
@@ -31,25 +40,31 @@ playwright install chromium
 ### 命令行
 
 ```bash
-python ting13/cli.py "https://www.ting13.cc/youshengxiaoshuo/10408/"
+python ting13/apps/cli/main.py "https://www.ting13.cc/youshengxiaoshuo/10408/"
 ```
 
 指定输出目录和范围：
 
 ```bash
-python ting13/cli.py -o "./downloads" --start 5 --end 10 "URL"
+python ting13/apps/cli/main.py -o "./downloads" --start 5 --end 10 "URL"
 ```
 
 使用代理和自动换 IP：
 
 ```bash
-python ting13/cli.py --proxy auto --rotate 30 "URL"
+python ting13/apps/cli/main.py --proxy auto --rotate 30 "URL"
 ```
 
 ### 图形界面
 
 ```bash
-python ting13/ting13_gui.py
+python ting13/apps/gui_v4/main.py
+```
+
+通用 GUI（v3）：
+
+```bash
+python ting13/apps/gui/main.py
 ```
 
 ## CLI 参数
@@ -67,6 +82,7 @@ python ting13/ting13_gui.py
 - 建议优先使用书籍详情页 URL，单集链接也可下载
 - 首次运行前请确认 Playwright 浏览器已安装
 - 如遇访问限制，建议开启代理并适当提高换 IP 频率
+- 打包请使用：`ting13/packaging/build.bat`（根目录 `ting13/build.bat` 为兼容转发）
 
 ## 免责声明
 

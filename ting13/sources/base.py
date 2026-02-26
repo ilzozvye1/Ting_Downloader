@@ -11,10 +11,10 @@ Source 基类 — 所有有声书站点插件的抽象接口
 from abc import ABC, abstractmethod
 from typing import List, Optional, TYPE_CHECKING
 
-from core.models import BookInfo, Chapter
+from ting13.core.models import BookInfo, Chapter
 
 if TYPE_CHECKING:
-    from core.download import DownloadCallbacks
+    from ting13.core.download import DownloadCallbacks
 
 
 class Source(ABC):

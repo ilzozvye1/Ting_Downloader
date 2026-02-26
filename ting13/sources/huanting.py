@@ -25,8 +25,8 @@ import requests
 from lxml import html as lxml_html
 
 from .base import Source
-from core.models import BookInfo, Chapter
-from core.network import build_session, get_proxy, MOBILE_UA, ClashRotator, random_ua
+from ting13.core.models import BookInfo, Chapter
+from ting13.core.network import build_session, get_proxy, MOBILE_UA, ClashRotator, random_ua
 
 # curl_cffi 用于绕过 TLS 指纹检测 (可选但强烈推荐)
 try:

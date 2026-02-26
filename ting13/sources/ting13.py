@@ -17,9 +17,9 @@ from urllib.parse import urljoin
 import lxml.html
 
 from .base import Source
-from core.models import BookInfo, Chapter
-from core.network import build_session, fetch_page, get_proxy, MOBILE_UA, DEFAULT_UA
-from core.utils import is_frozen, get_bundled_base, get_chrome_exe_path
+from ting13.core.models import BookInfo, Chapter
+from ting13.core.network import build_session, fetch_page, get_proxy, MOBILE_UA, DEFAULT_UA
+from ting13.core.utils import is_frozen, get_bundled_base, get_chrome_exe_path
 
 # Playwright 延迟导入 (仅在需要时)
 _playwright_available = True
