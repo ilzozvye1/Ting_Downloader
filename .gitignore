@@ -13,6 +13,9 @@ build/
 develop-eggs/
 dist/
 downloads/
+download_test/
+test_book_*/
+test_single/
 eggs/
 .eggs/
 lib/
@@ -41,10 +44,19 @@ pip-delete-this-directory.txt
 ting13/build/
 ting13/dist/
 
-# Diagnostic and test artifacts
+# Diagnostic and test artifacts (moved to debug/)
+debug/
 ting13/diag_*
 ting13/test_*
 ting13/_test_*/
+test_api_detail.py
+test_direct.py
+test_http_api.py
+test_https_proxy.py
+test_proxy_pool.py
+test_proxy_sites.py
+test_three_books.py
+wait_proxy.py
 *_out.txt
 
 # Captured analysis files

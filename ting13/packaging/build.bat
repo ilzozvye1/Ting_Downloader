@@ -60,6 +60,7 @@ echo [OK] Chromium ready
 echo.
 
 REM -- Prepare release folders --
+if not exist "%DIST_ROOT%" mkdir "%DIST_ROOT%"
 if not exist "%RELEASES_DIR%" mkdir "%RELEASES_DIR%"
 if not exist "%HISTORY_DIR%" mkdir "%HISTORY_DIR%"
 if exist "%CURRENT_DIR%" (
@@ -68,10 +69,22 @@ if exist "%CURRENT_DIR%" (
 )
 mkdir "%CURRENT_DIR%" >nul 2>&1
 
+REM -- Verify spec files exist --
+if not exist "%~dp0ting13_downloader.spec" (
+    echo [FAIL] ting13_downloader.spec not found in packaging directory!
+    if not defined NO_PAUSE pause
+    exit /b 1
+)
+if not exist "%~dp0ting13_gui.spec" (
+    echo [FAIL] ting13_gui.spec not found in packaging directory!
+    if not defined NO_PAUSE pause
+    exit /b 1
+)
+
 REM -- Build CLI version --
 echo [1/2] Building CLI version...
 echo.
-pyinstaller --clean --noconfirm --distpath "%CURRENT_DIR%" --workpath "..\build" ting13_downloader.spec
+pyinstaller --clean --noconfirm --distpath "%CURRENT_DIR%" --workpath "..\..\build" "%~dp0ting13_downloader.spec"
 if errorlevel 1 (
     echo.
     echo [FAIL] CLI build failed!
@@ -83,7 +96,7 @@ echo.
 REM -- Build GUI version --
 echo [2/2] Building GUI version...
 echo.
-pyinstaller --clean --noconfirm --distpath "%CURRENT_DIR%" --workpath "..\build" ting13_gui.spec
+pyinstaller --clean --noconfirm --distpath "%CURRENT_DIR%" --workpath "..\..\build" "%~dp0ting13_gui.spec"
 if errorlevel 1 (
     echo.
     echo [FAIL] GUI build failed!

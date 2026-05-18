@@ -1,0 +1,112 @@
+{
+  "幻听网 ting89.com": {
+    "name": "幻听网 ting89.com",
+    "tests": [
+      {
+        "name": "ting89-首页",
+        "status": "HTTP_502"
+      },
+      {
+        "name": "ting89-书籍页",
+        "status": "HTTP_502"
+      }
+    ]
+  },
+  "88听书网 88tingshu.com": {
+    "name": "88听书网 88tingshu.com",
+    "tests": [
+      {
+        "name": "88tingshu-https://",
+        "status": "FAIL",
+        "error": "超时"
+      },
+      {
+        "name": "88tingshu-http://",
+        "status": "PARSE_ERR",
+        "error": "parse_88tingshu_book() takes 2 positional arguments but 3 were given"
+      }
+    ]
+  },
+  "喜马拉雅 ximalaya.com": {
+    "name": "喜马拉雅 ximalaya.com",
+    "tests": [
+      {
+        "name": "xlmy-首页",
+        "status": "OK_RAW"
+      },
+      {
+        "name": "xlmy-专辑页",
+        "status": "OK",
+        "data": {
+          "title": [
+            "喜马拉雅-国内专业音频分享平台,随时随地,听我想听！",
+            "Loading interface..."
+          ]
+        }
+      },
+      {
+        "name": "xlmy-API列表",
+        "status": "OK",
+        "data": {
+          "total_tracks": 0,
+          "tracks": []
+        }
+      }
+    ]
+  },
+  "舒听网 shuting5.com": {
+    "name": "舒听网 shuting5.com",
+    "tests": [
+      {
+        "name": "shuting5-首页",
+        "status": "BLOCKED_403"
+      },
+      {
+        "name": "shuting5-HTTP",
+        "status": "BLOCKED_403"
+      }
+    ]
+  },
+  "中文听书网 tingzh.com": {
+    "name": "中文听书网 tingzh.com",
+    "tests": [
+      {
+        "name": "tingzh-首页",
+        "status": "FAIL",
+        "error": "SSL错误: HTTPSConnectionPool(host='www.tingzh.com', port=443): Max retries exceeded with url: / (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_s"
+      },
+      {
+        "name": "tingzh-HTTP",
+        "status": "HTTP_502"
+      }
+    ]
+  },
+  "爱书音 ishuyin.com": {
+    "name": "爱书音 ishuyin.com",
+    "tests": [
+      {
+        "name": "ishuyin-首页",
+        "status": "FAIL",
+        "error": "超时"
+      },
+      {
+        "name": "ishuyin-HTTP",
+        "status": "OK_RAW"
+      }
+    ]
+  },
+  "悦听巴 yuetingba.cn": {
+    "name": "悦听巴 yuetingba.cn",
+    "tests": [
+      {
+        "name": "yuetingba-首页",
+        "status": "FAIL",
+        "error": "SSL错误: HTTPSConnectionPool(host='www.yuetingba.cn', port=443): Max retries exceeded with url: / (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol ("
+      },
+      {
+        "name": "yuetingba-HTTP",
+        "status": "OK_RAW"
+      }
+    ]
+  }
+}

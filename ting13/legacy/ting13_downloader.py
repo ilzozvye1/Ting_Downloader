@@ -231,9 +231,14 @@ def resolve_via_doh(domain: str) -> Optional[str]:
         f"https://1.1.1.1/dns-query?name={domain}&type=A",
         f"https://8.8.8.8/resolve?name={domain}&type=A",
     ]
+    # DoH 请求必须直连，不走代理！
+    session = requests.Session()
+    session.trust_env = False  # 忽略环境变量中的代理设置
+    session.proxies = {}  # 清空代理
+    
     for url in doh_servers:
         try:
-            resp = requests.get(
+            resp = session.get(
                 url, headers={"Accept": "application/dns-json"},
                 timeout=8, verify=False,
             )
@@ -483,7 +488,7 @@ def _rewrite_url_with_doh(url: str) -> tuple:
     if not domain:
         return url, None
 
-    # 检测 DNS 污染
+    # 用 DoH 解析真实 IP
     real_ip = resolve_via_doh(domain)
     if not real_ip:
         return url, None
@@ -493,8 +498,8 @@ def _rewrite_url_with_doh(url: str) -> tuple:
     except Exception:
         local_ip = None
 
-    if local_ip and local_ip != real_ip:
-        # DNS 被污染，改写为真实 IP
+    # DNS 被污染 或 本地解析失败 → 使用 DoH 结果
+    if local_ip is None or local_ip != real_ip:
         new_url = url.replace(f"://{domain}", f"://{real_ip}", 1)
         return new_url, domain
     return url, None
@@ -506,26 +511,77 @@ def fetch_page(url: str) -> bytes:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    session = _build_session()
+    TIMEOUT = 10
 
-    # 先尝试直接请求
+    # 准备无代理 session
+    no_proxy_session = requests.Session()
+    no_proxy_session.mount("https://", _TLSAdapter())
+    no_proxy_session.mount("http://", _TLSAdapter())
+    no_proxy_session.trust_env = False
+    no_proxy_session.proxies = {}
+    cookie_dict = _cookies_for_requests()
+    if cookie_dict:
+        no_proxy_session.cookies.update(cookie_dict)
+
+    # 带代理 session
+    proxy_session = _build_session()
+
+    parsed = urlparse(url)
+    domain = parsed.hostname
+
+    # ── 策略1: 代理直连（让代理处理 DNS 和 SSL）──
     try:
-        resp = session.get(url, headers=headers, timeout=30, verify=False)
+        resp = proxy_session.get(url, headers=headers, timeout=TIMEOUT, verify=False)
         resp.raise_for_status()
         return resp.content
     except Exception:
         pass
 
-    # 如果失败，尝试 DoH 解析真实 IP
+    # ── 策略2: DoH 解析 + HTTP 直连真实 IP（核心策略）──
     new_url, host = _rewrite_url_with_doh(url)
     if host:
-        headers["Host"] = host
-        resp = session.get(new_url, headers=headers, timeout=30, verify=False)
+        # 强制用 HTTP 连接真实 IP，避免 SSL 证书不匹配
+        http_ip_url = new_url.replace("https://", "http://", 1)
+        ip_headers = dict(headers)
+        ip_headers["Host"] = host
+        try:
+            resp = no_proxy_session.get(http_ip_url, headers=ip_headers, timeout=TIMEOUT, verify=False)
+            resp.raise_for_status()
+            return resp.content
+        except Exception:
+            pass
+
+    # ── 策略3: 无代理直连原始 URL ──
+    try:
+        resp = no_proxy_session.get(url, headers=headers, timeout=TIMEOUT, verify=False)
         resp.raise_for_status()
         return resp.content
+    except Exception:
+        pass
 
-    # 最后兜底，抛出原始异常
-    resp = session.get(url, headers=headers, timeout=30, verify=False)
+    # ── 策略4: HTTPS 降级为 HTTP ──
+    if parsed.scheme == "https":
+        http_url = url.replace("https://", "http://", 1)
+        try:
+            resp = no_proxy_session.get(http_url, headers=headers, timeout=TIMEOUT, verify=False)
+            resp.raise_for_status()
+            return resp.content
+        except Exception:
+            pass
+
+    # ── 策略5: DoH + HTTPS 直连真实 IP（最后尝试）──
+    if host:
+        ip_headers = dict(headers)
+        ip_headers["Host"] = host
+        try:
+            resp = no_proxy_session.get(new_url, headers=ip_headers, timeout=TIMEOUT, verify=False)
+            resp.raise_for_status()
+            return resp.content
+        except Exception:
+            pass
+
+    # 最后兜底
+    resp = proxy_session.get(url, headers=headers, timeout=TIMEOUT, verify=False)
     resp.raise_for_status()
     return resp.content
 
@@ -545,11 +601,11 @@ def parse_book_page(url: str) -> BookInfo:
     parsed = urlparse(url)
     path = parsed.path or "/"
     query = f"?{parsed.query}" if parsed.query else ""
+    # 优先 HTTP（避免 SSL 问题），只保留最可能成功的 3 个
     candidates = [
         f"http://m.ting13.cc{path}{query}",
         f"http://www.ting13.cc{path}{query}",
-        f"https://www.ting13.cc{path}{query}",
-        url,
+        url,  # 原始 URL 作为兜底
     ]
     seen = set()
     content = None
@@ -873,9 +929,30 @@ def extract_audio_url_fast(play_url: str, session: "Optional[requests.Session]" 
         url = base + endpoint
         try:
             resp = session.get(url, headers=headers, timeout=10, verify=False)
+            if resp.status_code == 405:
+                # 405 = Method Not Allowed，尝试 POST
+                try:
+                    resp = session.post(url, headers=headers, timeout=10, verify=False)
+                except Exception:
+                    continue
             if resp.status_code != 200:
+                if "login" in resp.text or "468" in str(resp.status_code):
+                    print(f"  [!] API 返回 {resp.status_code}，需要登录")
+                    return None
                 continue
             data = resp.json()
+            
+            # 检查是否需要登录（多种检测方式）
+            if "loginurl" in data:
+                print(f"  [!] API 返回需要登录 (loginurl)")
+                raise LoginRequiredError("此书籍需要登录才能下载")
+                
+            if "status" in data and data["status"] != 200:
+                print(f"  [!] API 返回非200状态: {data['status']}")
+                msg = str(data.get('msg', ''))
+                if "login" in msg.lower() or "登录" in msg:
+                    raise LoginRequiredError("此书籍需要登录才能下载")
+                continue
             for key in ["audioUrl", "mp3", "m4a", "url", "audio_url", "src", "play_url"]:
                 if key in data and data[key]:
                     audio_url = data[key]
@@ -884,10 +961,16 @@ def extract_audio_url_fast(play_url: str, session: "Optional[requests.Session]" 
                     ):
                         if _is_trusted_audio_url(audio_url) and not _is_blacklisted_audio_url(audio_url):
                             return audio_url
-        except Exception:
+        except Exception as e:
+            print(f"  [!] API 调用出错: {e}")
             continue
 
     return None
+
+
+class LoginRequiredError(Exception):
+    """当书籍需要登录才能下载时抛出"""
+    pass
 
 
 def extract_audio_url(page: Page, play_url: str, timeout: int = 30) -> Optional[str]:
@@ -1254,14 +1337,22 @@ def download_book(
         launch_kwargs: Dict = {"headless": headless}
         if _is_frozen():
             base = _get_bundled_base()
-            chrome_exe = os.path.join(
-                base, "ms-playwright", "chromium-1208", "chrome-win64", "chrome.exe"
-            )
-            if os.path.isfile(chrome_exe):
-                launch_kwargs["executable_path"] = chrome_exe
-                print(f"  [*] 使用内嵌浏览器: {chrome_exe}")
+            browsers_path = os.path.join(base, "ms-playwright")
+            if os.path.isdir(browsers_path):
+                import glob as _glob
+                chromium_dirs = _glob.glob(os.path.join(browsers_path, "chromium-*"))
+                if chromium_dirs:
+                    chromium_dir = sorted(chromium_dirs)[-1]
+                    chrome_exe = os.path.join(chromium_dir, "chrome-win64", "chrome.exe")
+                    if os.path.isfile(chrome_exe):
+                        launch_kwargs["executable_path"] = chrome_exe
+                        print(f"  [*] 使用内嵌浏览器: {chrome_exe}")
+                    else:
+                        print(f"  [!] 警告: 未找到内嵌浏览器，尝试使用系统默认...")
+                else:
+                    print(f"  [!] 警告: 未找到 Chromium 目录，尝试使用系统默认...")
             else:
-                print(f"  [!] 警告: 未找到内嵌浏览器，尝试使用系统默认...")
+                print(f"  [!] 警告: 未找到 ms-playwright 目录，尝试使用系统默认...")
 
         if _proxy:
             launch_kwargs["proxy"] = {"server": _proxy}
@@ -1296,7 +1387,10 @@ def download_book(
             # 检查是否已下载
             safe_title = sanitize_filename(chapter.title)
             # 检查已存在的文件
-            existing = [f for f in os.listdir(book_dir) if f.startswith(f"{chapter.index:04d}_")]
+            existing = [
+                f for f in os.listdir(book_dir)
+                if f.startswith(f"{chapter.index:04d}_") or f.startswith(f"{chapter.index}集_")
+            ]
             if existing:
                 print(f"  [SKIP] 已存在，跳过: {existing[0]}")
                 success_count += 1
@@ -1352,7 +1446,7 @@ def download_book(
                 ext = ".aac"
 
             # 下载音频
-            filename = f"{chapter.index:04d}_{safe_title}{ext}"
+            filename = f"{chapter.index}_{safe_title}{ext}"
             filepath = os.path.join(book_dir, filename)
 
             print(f"  [>] 下载中...")
@@ -1494,4 +1588,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

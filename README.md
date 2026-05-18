@@ -28,11 +28,19 @@
 
 ## 环境依赖
 
-推荐 Python 3.10+，并安装以下依赖：
+推荐 Python 3.10+。首次运行建议在虚拟环境中安装依赖：
 
 ```bash
-pip install playwright requests lxml cssselect customtkinter
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 playwright install chromium
+```
+
+如果需要打包或运行开发检查：
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 ## 快速开始
@@ -76,12 +84,38 @@ python ting13/apps/gui/main.py
 - `--no-headless`：显示浏览器窗口
 - `--proxy`：代理地址，`auto` 为自动检测
 - `--rotate`：每 N 集通过 Clash API 自动换 IP
+- `--proxy-pool-url` / `--proxy-pool-key`：使用代理池 API
+- `--download-workers`：并行下载线程数
+- `--url-fetch-workers`：代理池模式下并发获取音频 URL 的线程数
+- `--fast`：代理池极速模式
+- `--batch`：代理池批量预获取 URL 模式
+- `--delay`：额外请求延迟，适合多任务并发时降低限流风险
+
+## 开发与检查
+
+当前项目包含部分依赖真实站点和代理环境的手动联调脚本，这些脚本默认不纳入版本管理。基础检查可先运行：
+
+```bash
+python -m compileall -q ting13
+python ting13/apps/cli/main.py --help
+```
+
+打包入口：
+
+```bash
+ting13\packaging\build.bat
+```
 
 ## 使用说明
 
 - 建议优先使用书籍详情页 URL，单集链接也可下载
 - 首次运行前请确认 Playwright 浏览器已安装
 - 如遇访问限制，建议开启代理并适当提高换 IP 频率
+- `ting13.cc` 登录信息会保存到用户目录下的 `.ting13_cookies.json`
+- `huanting.cc / ting22.com` 的高集数章节可能触发验证码，建议安装可选依赖：
+  ```bash
+  pip install -r requirements-captcha.txt
+  ```
 - 打包请使用：`ting13/packaging/build.bat`（根目录 `ting13/build.bat` 为兼容转发）
 
 ## 免责声明

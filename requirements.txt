@@ -1,0 +1,6 @@
+requests>=2.31
+urllib3>=2.0
+lxml>=5.0
+cssselect>=1.2
+playwright>=1.40
+customtkinter>=5.2

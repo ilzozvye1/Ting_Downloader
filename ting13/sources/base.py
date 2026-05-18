@@ -29,15 +29,16 @@ class Source(ABC):
       - get_audio_url(chapter): 获取音频下载 URL
     """
 
-    # ── 子类必须覆盖 ──
+    match: List[str] = []
+    names: List[str] = []
+    base_url: str = ""
 
-    match: List[str] = []       # URL 匹配正则列表
-    names: List[str] = []       # 站点名称列表
-    base_url: str = ""          # 站点基础 URL (用于 Referer)
+    def __init__(self):
+        self._log_func = print
+        self._headless = True
 
     @property
     def name(self) -> str:
-        """主名称"""
         return self.names[0] if self.names else "unknown"
 
     # ── 核心方法 (子类必须实现) ──
@@ -92,22 +93,13 @@ class Source(ABC):
     # ── 生命周期钩子 (可选覆盖) ──
 
     def before_download(self, chapters: List[Chapter], callbacks: "DownloadCallbacks"):
-        """
-        下载开始前的准备工作
-
-        可用于: 启动 Playwright 浏览器, 初始化 session, 解算验证码等。
-        默认什么都不做。
-        """
-        pass
+        self._log_func = callbacks.on_log
 
     def after_download(self):
-        """
-        下载完成后的清理工作
+        self._log_func = print
 
-        可用于: 关闭浏览器, 清理临时文件等。
-        默认什么都不做。
-        """
-        pass
+    def set_headless(self, headless: bool):
+        self._headless = headless
 
     # ── 认证 (可选) ──
 
@@ -117,4 +109,28 @@ class Source(ABC):
 
     def is_authenticated(self) -> bool:
         """是否已登录"""
+        return False
+
+    def check_login_required(self, chapters: List[Chapter], callbacks: "DownloadCallbacks") -> bool:
+        """
+        检测书籍是否需要登录才能下载
+        
+        默认实现：不支持登录检测，返回 False
+        
+        Returns:
+            True: 需要登录但未登录
+            False: 不需要登录或已登录
+        """
+        return False
+
+    def prompt_login(self, callbacks: "DownloadCallbacks") -> bool:
+        """
+        提示用户进行登录操作
+        
+        默认实现：不做任何操作
+        
+        Returns:
+            True: 用户已登录
+            False: 用户取消登录
+        """
         return False

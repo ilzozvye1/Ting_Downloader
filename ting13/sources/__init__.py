@@ -14,6 +14,7 @@ from typing import List, Optional, Type
 from .base import Source
 from .ting13 import Ting13Source
 from .huanting import HuantingSource
+from .yuetingba import YuetingbaSource
 
 
 def get_source_classes() -> List[Type[Source]]:
@@ -21,6 +22,7 @@ def get_source_classes() -> List[Type[Source]]:
     return [
         Ting13Source,
         HuantingSource,
+        YuetingbaSource,
     ]
 
 

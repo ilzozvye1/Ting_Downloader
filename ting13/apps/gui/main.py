@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-有声小说下载器 — 图形界面 (v3.0 重构版)
+有声小说下载器 — 图形界面 (v4.3)
 
 基于插件化 Source 架构, 站点无关的 GUI。
 添加新站点不需要修改本文件。
@@ -81,7 +81,7 @@ class App(ctk.CTk):
     """有声小说下载器 — 插件化架构 GUI"""
 
     APP_TITLE = "有声小说下载器"
-    VERSION = "v3.0"
+    VERSION = "v4.3"
     WINDOW_WIDTH = 820
     WINDOW_HEIGHT = 720
 

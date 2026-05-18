@@ -57,9 +57,18 @@ def get_chrome_exe_path() -> Optional[str]:
     if not is_frozen():
         return None
     base = get_bundled_base()
-    chrome_exe = os.path.join(
-        base, "ms-playwright", "chromium-1208", "chrome-win64", "chrome.exe"
-    )
+    browsers_path = os.path.join(base, "ms-playwright")
+    
+    if not os.path.isdir(browsers_path):
+        return None
+    
+    import glob
+    chromium_dirs = glob.glob(os.path.join(browsers_path, "chromium-*"))
+    if not chromium_dirs:
+        return None
+    
+    chromium_dir = sorted(chromium_dirs)[-1]
+    chrome_exe = os.path.join(chromium_dir, "chrome-win64", "chrome.exe")
     return chrome_exe if os.path.isfile(chrome_exe) else None
 
 

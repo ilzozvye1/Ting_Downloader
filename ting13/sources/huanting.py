@@ -81,6 +81,7 @@ class HuantingSource(Source):
     _COOKIE_REFRESH_THRESHOLD = 15
 
     def __init__(self):
+        super().__init__()
         self._book_id: Optional[str] = None
         self._captcha_cookies: Optional[Dict[str, str]] = None  # 验证码 cookies 缓存
         self._clash_rotator: Optional[ClashRotator] = None
@@ -90,6 +91,58 @@ class HuantingSource(Source):
     def set_clash_rotator(self, rotator: Optional[ClashRotator]):
         """设置 Clash 节点轮换器 (用于验证码解算时切换 IP)"""
         self._clash_rotator = rotator
+
+    def _fetch_book_page(self, url: str) -> Optional[str]:
+        """
+        多策略获取书籍页面 HTML
+        
+        策略:
+        1. requests + TLS 适配器 (默认)
+        2. curl_cffi TLS 指纹伪装 (绕过 WAF JA3 检测)
+        3. Playwright 浏览器 (绕过所有 TLS 指纹检测)
+        """
+        # 策略 1: requests + TLS 适配器
+        try:
+            session = build_session(referer=BASE + "/")
+            resp = session.get(url, timeout=15, verify=False)
+            resp.raise_for_status()
+            resp.encoding = "utf-8"
+            if "有声小说" in resp.text or "vlink" in resp.text:
+                return resp.text
+            if "百度" in resp.text[:2000]:
+                self._log_func("  [*] 策略1: 被重定向到百度, 尝试其他方法...")
+            else:
+                self._log_func("  [*] 策略1: 页面内容异常")
+        except Exception as e:
+            self._log_func(f"  [*] 策略1 (requests) 失败: {type(e).__name__}")
+
+        # 策略 2: curl_cffi TLS 指纹伪装
+        if _HAS_CFFI:
+            try:
+                self._log_func("  [*] 策略2: 尝试 curl_cffi TLS 指纹伪装...")
+                s = cffi_requests.Session(impersonate=CFFI_BROWSER)
+                resp = s.get(url, timeout=15, verify=False, headers={
+                    "Referer": BASE + "/",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9",
+                })
+                resp.encoding = "utf-8"
+                if "有声小说" in resp.text or "vlink" in resp.text:
+                    return resp.text
+                self._log_func("  [*] 策略2: 页面内容异常")
+            except Exception as e:
+                self._log_func(f"  [*] 策略2 (curl_cffi) 失败: {type(e).__name__}")
+
+        # 策略 3: Playwright 浏览器
+        if _HAS_PLAYWRIGHT:
+            try:
+                self._log_func("  [*] 策略3: 尝试 Playwright 浏览器...")
+                return _fetch_page_via_pw(url, headless=self._headless,
+                                          log_func=self._log_func)
+            except Exception as e:
+                self._log_func(f"  [*] 策略3 (Playwright) 失败: {type(e).__name__}")
+
+        return None
 
     # ── URL 识别 ──
 
@@ -115,11 +168,14 @@ class HuantingSource(Source):
             raise ValueError(f"无法从 URL 提取书籍 ID: {url}")
         self._book_id = book_id
 
-        session = build_session(referer=BASE + "/")
-        resp = session.get(url, timeout=15)
-        resp.raise_for_status()
-        resp.encoding = "utf-8"
-        tree = lxml_html.fromstring(resp.text)
+        html = self._fetch_book_page(url)
+        if not html:
+            raise ConnectionError(
+                f"无法获取书籍页面。站点可能屏蔽了当前 IP, "
+                f"请尝试使用代理或 VPN 切换 IP 后重试。\n"
+                f"URL: {url}"
+            )
+        tree = lxml_html.fromstring(html)
 
         # 书名
         title = ""
@@ -164,8 +220,9 @@ class HuantingSource(Source):
         all_raw = parse_chapter_list(tree)
 
         if total_pages > 1:
-            print(f"  [*] 解析分页: 共 {total_pages} 页...")
+            self._log_func(f"  [*] 解析分页: 共 {total_pages} 页...")
 
+        session = build_session(referer=BASE + "/")
         for p in range(2, total_pages + 1):
             page_url = f"{BASE}/book/{book_id}.html?p={p}"
             try:
@@ -175,9 +232,9 @@ class HuantingSource(Source):
                 new_items = parse_chapter_list(lxml_html.fromstring(r.text))
                 all_raw.extend(new_items)
                 if p % 5 == 0 or p == total_pages:
-                    print(f"  [*] 已解析 {p}/{total_pages} 页 ({len(all_raw)} 章)")
+                    self._log_func(f"  [*] 已解析 {p}/{total_pages} 页 ({len(all_raw)} 章)")
             except Exception as e:
-                print(f"  [!] 第 {p} 页解析失败: {e}")
+                self._log_func(f"  [!] 第 {p} 页解析失败: {e}")
 
         chapters = [
             Chapter(index=i, title=t, play_url=href)
@@ -198,8 +255,8 @@ class HuantingSource(Source):
         获取音频 URL
 
         策略:
-        1. 主动刷新: cookie 使用超过阈值时提前刷新
-        2. 带 cookies 尝试 API
+        1. 双 API: 先尝试移动端 (curl_cffi, 无需验证码), 再尝试桌面端 (requests)
+        2. 主动刷新: cookie 使用超过阈值时提前刷新
         3. API 返回 fail → 并行解算验证码 (3 并发)
         4. 用新 cookie 重试 API
         """
@@ -211,54 +268,58 @@ class HuantingSource(Source):
         if (self._captcha_cookies
                 and self._cookie_use_count >= self._COOKIE_REFRESH_THRESHOLD
                 and self._last_captcha_url):
-            print(f"  [验证码] cookie 已用 {self._cookie_use_count} 次, 主动刷新...")
+            self._log_func(f"  [验证码] cookie 已用 {self._cookie_use_count} 次, 主动刷新...")
             cookies = solve_desktop_captcha(
                 self._last_captcha_url, proxy=get_proxy(),
                 clash_rotator=self._clash_rotator, max_retries=6,
+                log_func=self._log_func,
             )
             if cookies:
                 self._captcha_cookies = cookies
                 self._cookie_use_count = 0
-                print(f"  [验证码] cookie 刷新成功")
+                self._log_func(f"  [验证码] cookie 刷新成功")
 
-        # 1. 带缓存的 cookies 尝试 API
-        result = _api_get_audio(book_id, chapter.index,
-                                cookies=self._captcha_cookies)
+        # 1. 双 API 策略: 优先移动端, 回退桌面端
+        result = _api_get_audio_dual(book_id, chapter.index,
+                                     cookies=self._captcha_cookies,
+                                     proxy=get_proxy())
         if result and result != "RATE_LIMITED":
             self._cookie_use_count += 1
             return result
 
         if result == "RATE_LIMITED":
-            print(f"  [!] API 被限流")
+            self._log_func(f"  [!] API 被限流")
             return None
 
         # 2. API 失败 → 需要验证码
         if not _HAS_CV2:
-            print(f"  [!] 章节 {chapter.index} 需要验证码, 但 OpenCV 未安装")
-            print(f"  [!] 请安装: pip install opencv-python-headless numpy")
+            self._log_func(f"  [!] 章节 {chapter.index} 需要验证码, 但 OpenCV 未安装")
+            self._log_func(f"  [!] 请安装: pip install opencv-python-headless numpy")
             return None
 
         proxy_info = get_proxy() or "直连"
         clash_info = "有" if self._clash_rotator else "无"
-        print(f"  [验证码] 章节 {chapter.index} 需要验证码, 自动解算中... "
+        self._log_func(f"  [验证码] 章节 {chapter.index} 需要验证码, 自动解算中... "
               f"(代理={proxy_info}, Clash={clash_info})")
         self._last_captcha_url = chapter.play_url
         cookies = solve_desktop_captcha(
             chapter.play_url, proxy=get_proxy(),
             clash_rotator=self._clash_rotator, max_retries=10,
+            log_func=self._log_func,
         )
 
         if cookies:
             self._captcha_cookies = cookies
             self._cookie_use_count = 0
-            print(f"  [验证码] 解算成功, 重试 API...")
-            result = _api_get_audio(book_id, chapter.index, cookies=cookies)
+            self._log_func(f"  [验证码] 解算成功, 重试 API...")
+            result = _api_get_audio_dual(book_id, chapter.index,
+                                         cookies=cookies, proxy=get_proxy())
             if result and result != "RATE_LIMITED":
                 self._cookie_use_count += 1
                 return result
-            print(f"  [!] 验证码通过但 API 仍返回 fail")
+            self._log_func(f"  [!] 验证码通过但 API 仍返回 fail")
         else:
-            print(f"  [!] 验证码解算失败")
+            self._log_func(f"  [!] 验证码解算失败")
 
         return None
 
@@ -273,8 +334,9 @@ class HuantingSource(Source):
         if not book_id:
             return None
 
-        result = _api_get_audio(book_id, chapter.index,
-                                cookies=self._captcha_cookies)
+        result = _api_get_audio_dual(book_id, chapter.index,
+                                     cookies=self._captcha_cookies,
+                                     proxy=get_proxy())
         if result and result != "RATE_LIMITED":
             return result
 
@@ -285,6 +347,45 @@ class HuantingSource(Source):
 # ══════════════════════════════════════════════════════════════
 # 内部函数
 # ══════════════════════════════════════════════════════════════
+
+def _fetch_page_via_pw(url: str, headless: bool = True,
+                       log_func=print) -> Optional[str]:
+    """通过 Playwright 浏览器获取页面 HTML"""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=headless,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+            ],
+        )
+        context = browser.new_context(
+            user_agent=random_ua(),
+            locale="zh-CN",
+        )
+        page = context.new_page()
+        page.add_init_script(
+            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+        )
+
+        try:
+            resp = page.goto(url, timeout=20000, wait_until="domcontentloaded")
+            if resp and resp.status == 200:
+                html = page.content()
+                if "有声小说" in html or "vlink" in html:
+                    return html
+                log_func("  [*] Playwright 页面内容异常")
+            else:
+                log_func(f"  [*] Playwright 状态码: {resp.status if resp else 'N/A'}")
+            return None
+        except Exception as e:
+            log_func(f"  [*] Playwright 异常: {e}")
+            return None
+        finally:
+            browser.close()
+
 
 def _extract_book_id(url: str) -> Optional[str]:
     m = re.search(r"/book/(\d+)", url)
@@ -566,7 +667,8 @@ def _derive_book_url(play_url: str) -> str:
     return BASE + "/"
 
 
-def _solve_single_attempt(play_url: str, proxy: Optional[str] = None) -> Optional[Dict[str, str]]:
+def _solve_single_attempt(play_url: str, proxy: Optional[str] = None,
+                         log_func=print) -> Optional[Dict[str, str]]:
     """
     单次验证码解算尝试 (线程安全, 不操作 Clash)
 
@@ -604,17 +706,17 @@ def _solve_single_attempt(play_url: str, proxy: Optional[str] = None) -> Optiona
     try:
         resp = session.get(play_url, timeout=20, allow_redirects=False)
     except Exception as e:
-        print(f"    [{tid}] 页面获取失败: {e}")
+        log_func(f"    [{tid}] 页面获取失败: {e}")
         return None
 
     # 检测 301 重定向到百度
     if resp.status_code in (301, 302, 303, 307, 308):
         location = resp.headers.get("Location", "")
         if "baidu" in location:
-            print(f"    [{tid}] 被 {resp.status_code} 重定向到百度"
+            log_func(f"    [{tid}] 被 {resp.status_code} 重定向到百度"
                   f" (session={book_ok}, cookies={list(session.cookies.keys())})")
         else:
-            print(f"    [{tid}] 被重定向到: {location}")
+            log_func(f"    [{tid}] 被重定向到: {location}")
         return None
 
     resp.encoding = "utf-8"
@@ -622,17 +724,17 @@ def _solve_single_attempt(play_url: str, proxy: Optional[str] = None) -> Optiona
 
     # 二次检查: 页面内容是否为百度
     if "百度" in html[:2000]:
-        print(f"    [{tid}] 页面内容是百度")
+        log_func(f"    [{tid}] 页面内容是百度")
         return None
 
     # 限流
     if "频繁" in html or "受限" in html:
-        print(f"    [{tid}] 被限流")
+        log_func(f"    [{tid}] 被限流")
         return None
 
     # 已有播放器
     if "PTingJplayer" in html and "bg_pic" not in html:
-        print(f"    [{tid}] 无需验证码, 直接获得 session")
+        log_func(f"    [{tid}] 无需验证码, 直接获得 session")
         return dict(session.cookies)
 
     # 提取 Data
@@ -642,7 +744,7 @@ def _solve_single_attempt(play_url: str, proxy: Optional[str] = None) -> Optiona
         page_len = len(html)
         has_title = bool(re.search(r'<title>(.*?)</title>', html))
         has_script = '<script' in html
-        print(f"    [{tid}] 未找到 Data 变量 "
+        log_func(f"    [{tid}] 未找到 Data 变量 "
               f"(len={page_len}, title={has_title}, script={has_script})")
         # 保存页面用于调试 (仅第一个线程)
         if tid.endswith("0") or tid.endswith("d"):
@@ -653,7 +755,7 @@ def _solve_single_attempt(play_url: str, proxy: Optional[str] = None) -> Optiona
                 )
                 with open(debug_path, "w", encoding="utf-8") as f:
                     f.write(html)
-                print(f"    [{tid}] 页面已保存到: {debug_path}")
+                log_func(f"    [{tid}] 页面已保存到: {debug_path}")
             except Exception:
                 pass
         return None
@@ -725,19 +827,20 @@ def _solve_single_attempt(play_url: str, proxy: Optional[str] = None) -> Optiona
         res = vr.json()
         state = res.get("state")
         if state == 0:
-            print(f"    [{tid}] 解算成功! x={x_pos}")
+            log_func(f"    [{tid}] 解算成功! x={x_pos}")
             return dict(session.cookies)
         else:
-            print(f"    [{tid}] 验证失败 state={state} x={x_pos}")
+            log_func(f"    [{tid}] 验证失败 state={state} x={x_pos}")
     except Exception as e:
-        print(f"    [{tid}] 提交失败: {e}")
+        log_func(f"    [{tid}] 提交失败: {e}")
 
     return None
 
 
 def solve_desktop_captcha(play_url: str, proxy: Optional[str] = None,
                           clash_rotator: Optional[ClashRotator] = None,
-                          max_retries: int = 10) -> Optional[Dict[str, str]]:
+                          max_retries: int = 10,
+                          log_func=print) -> Optional[Dict[str, str]]:
     """
     并行验证码解算 — 同时用多个节点尝试, 第一个成功即返回。
 
@@ -748,7 +851,7 @@ def solve_desktop_captcha(play_url: str, proxy: Optional[str] = None,
     - 比串行快 3 倍以上
     """
     if not _HAS_CV2:
-        print("  [!] OpenCV 未安装, 无法解算验证码")
+        log_func("  [!] OpenCV 未安装, 无法解算验证码")
         return None
 
     play_url = play_url.replace("m.huanting.cc", "www.huanting.cc")
@@ -758,7 +861,7 @@ def solve_desktop_captcha(play_url: str, proxy: Optional[str] = None,
 
     for rnd in range(rounds):
         attempt_base = rnd * PARALLEL + 1
-        print(f"  [验证码] 并行尝试 {attempt_base}-"
+        log_func(f"  [验证码] 并行尝试 {attempt_base}-"
               f"{min(attempt_base + PARALLEL - 1, max_retries)}/{max_retries} "
               f"({PARALLEL} 并发)...")
 
@@ -766,13 +869,13 @@ def solve_desktop_captcha(play_url: str, proxy: Optional[str] = None,
         if clash_rotator and rnd > 0:
             new_node = clash_rotator.rotate()
             if new_node:
-                print(f"  [验证码] 切换到: {new_node}")
+                log_func(f"  [验证码] 切换到: {new_node}")
                 time.sleep(1)
 
         # 并行解算
         with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
             futures = [
-                pool.submit(_solve_single_attempt, play_url, proxy)
+                pool.submit(_solve_single_attempt, play_url, proxy, log_func)
                 for _ in range(PARALLEL)
             ]
             try:
@@ -783,13 +886,13 @@ def solve_desktop_captcha(play_url: str, proxy: Optional[str] = None,
                             # 成功! 取消其他任务
                             for f in futures:
                                 f.cancel()
-                            print(f"  [验证码] ✓ 并行解算成功! "
+                            log_func(f"  [验证码] ✓ 并行解算成功! "
                                   f"(cookie={list(result.keys())})")
                             return result
                     except Exception:
                         pass
             except TimeoutError:
-                print(f"  [验证码] 本轮超时, 继续下一轮...")
+                log_func("  [验证码] 本轮超时, 继续下一轮...")
                 for f in futures:
                     f.cancel()
 
@@ -801,10 +904,11 @@ def solve_desktop_captcha(play_url: str, proxy: Optional[str] = None,
     return None
 
 
-def solve_mobile_captcha(play_url: str, proxy: Optional[str] = None, max_retries: int = 6) -> Optional[Dict[str, str]]:
+def solve_mobile_captcha(play_url: str, proxy: Optional[str] = None,
+                         max_retries: int = 6, log_func=print) -> Optional[Dict[str, str]]:
     """自动解算移动端滑块验证码"""
     if not _HAS_CV2:
-        print("  [!] OpenCV 未安装, 无法自动解算验证码")
+        log_func("  [!] OpenCV 未安装, 无法自动解算验证码")
         return None
 
     play_url = play_url.replace("www.huanting.cc", "m.huanting.cc")
@@ -817,14 +921,14 @@ def solve_mobile_captcha(play_url: str, proxy: Optional[str] = None, max_retries
         session.proxies = {"http": proxy, "https": proxy}
 
     for attempt in range(1, max_retries + 1):
-        print(f"  [验证码] 尝试 {attempt}/{max_retries}...")
+        log_func(f"  [验证码] 尝试 {attempt}/{max_retries}...")
 
         try:
             r = session.get(play_url, timeout=15)
             r.encoding = "utf-8"
             html = r.text
         except Exception as e:
-            print(f"  [验证码] 页面获取失败: {e}")
+            log_func(f"  [验证码] 页面获取失败: {e}")
             time.sleep(2)
             continue
 
@@ -854,7 +958,7 @@ def solve_mobile_captcha(play_url: str, proxy: Optional[str] = None, max_retries
             reconstructed = _reconstruct_image(bg_img, slice_data)
             x_pos = _find_puzzle_position(reconstructed, piece_img)
         except Exception as e:
-            print(f"  [验证码] 图像处理失败: {e}")
+            log_func(f"  [验证码] 图像处理失败: {e}")
             time.sleep(2)
             continue
 

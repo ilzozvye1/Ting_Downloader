@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 有声小说下载器 - 图形界面版 v4.3
-支持 ting13.cc / ting22.com (huanting.cc)
+支持 ting13.cc / ting22.com (huanting.cc) / yuetingba.cn
 基于 CustomTkinter 的现代 UI - 多标签页多任务 (多进程)
 
 特性:
 - 多标签页：每本书一个页签，独立进程并行下载
 - 集中式换IP管理：子进程发请求，主进程统一执行（全局冷却防冲突）
-- 导航栏：ting13.cc 主页快捷跳转 + 最近10条历史URL快速回填
+- 导航栏：网站主页下拉菜单快捷跳转 + 最近10条历史URL快速回填
 - 并行 CDN 下载 + URL 预取流水线
 - 自适应延迟 + 主动 IP 轮换
 """
@@ -34,37 +34,15 @@ if __package__ in (None, ""):
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
-# ── ting13.cc 旧架构 (Playwright) ────────────────────────────
-from ting13.legacy.ting13_downloader import (
-    _is_frozen,
-    _get_bundled_base,
-    Chapter,
-    BookInfo,
-    fetch_page,
-    parse_book_page,
-    extract_audio_url,
-    extract_audio_url_fast,
-    sanitize_filename,
-    download_cover,
-    detect_url_type,
-    _build_session,
-    save_cookies,
-    load_cookies,
-    clear_cookies,
-    has_cookies,
-    set_proxy,
-    get_proxy,
-    detect_system_proxy,
-    ClashRotator,
-    resolve_via_doh,
-    _is_dns_poisoned,
+# ── 新架构 (Source + DownloadEngine) ─────────────────────────
+from ting13.core.utils import is_frozen, get_bundled_base, get_chrome_exe_path
+from ting13.core.network import (
+    set_proxy, get_proxy, detect_system_proxy,
+    is_dns_poisoned, resolve_via_doh, ClashRotator,
 )
+from ting13.sources import find_source, get_source_classes
+from ting13.sources.ting13 import save_cookies, load_cookies, clear_cookies, has_cookies
 from playwright.sync_api import sync_playwright
-
-# ── huanting.cc 新架构 (DownloadEngine) ──────────────────────
-from ting13.core.download import DownloadEngine, DownloadCallbacks
-from ting13.core.network import set_proxy as core_set_proxy
-from ting13.sources.huanting import HuantingSource
 
 
 # ══════════════════════════════════════════════════════════════
@@ -82,7 +60,12 @@ class UrlHistory:
 
     def _resolve_path(self) -> str:
         if getattr(sys, "frozen", False):
-            base = os.path.dirname(sys.executable)
+            app_name = "ting13_downloader"
+            if sys.platform == "win32":
+                base = os.path.join(os.environ.get("APPDATA", ""), app_name)
+            else:
+                base = os.path.expanduser(f"~/.local/share/{app_name}")
+            os.makedirs(base, exist_ok=True)
         else:
             base = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(base, self.FILENAME)
@@ -144,13 +127,13 @@ class UrlHistory:
 # 站点识别
 # ══════════════════════════════════════════════════════════════
 
-def detect_site(url: str) -> str:
-    url_lower = url.lower()
-    if any(d in url_lower for d in ["ting13.cc", "ting13.com"]):
-        return "ting13"
-    if any(d in url_lower for d in ["ting22.com", "huanting.cc"]):
+def _site_from_source(source) -> str:
+    if source is None:
+        return "unknown"
+    name = source.name.lower()
+    if "huanting" in name or "ting22" in name:
         return "huanting"
-    return "unknown"
+    return "ting13"
 
 
 # ══════════════════════════════════════════════════════════════
@@ -243,7 +226,18 @@ class TaskTab:
         self.headless_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             settings_row, text="隐藏浏览器", variable=self.headless_var
-        ).pack(side="left")
+        ).pack(side="left", padx=(0, 12))
+
+        ctk.CTkLabel(settings_row, text="并发数:").pack(side="left", padx=(0, 4))
+        self.concurrency_var = ctk.StringVar(value="1")
+        self.concurrency_menu = ctk.CTkOptionMenu(
+            settings_row,
+            variable=self.concurrency_var,
+            values=["1", "2", "3", "5"],
+            width=60,
+            dynamic_resizing=False,
+        )
+        self.concurrency_menu.pack(side="left")
 
         btn_row = ctk.CTkFrame(opts_frame, fg_color="transparent")
         btn_row.pack(fill="x", padx=8, pady=(4, 6))
@@ -434,11 +428,58 @@ class TaskTab:
                 elif kind == "result":
                     key = msg[1]
                     value = msg[2]
+
+                    # 处理流式增量更新
+                    if key.endswith("_increment"):
+                        # 增量章节更新：追加到现有列表
+                        if self._book_data and isinstance(self._book_data, dict):
+                            new_chapters = value.get("chapters", [])
+                            existing = self._book_data.get("chapters", [])
+                            existing.extend(new_chapters)
+                            self._book_data["chapters"] = existing
+
+                            total_parsed = value.get("total_parsed", len(existing))
+                            total_estimated = self._book_data.get("_total_estimated", total_parsed)
+                            current_page = value.get("current_page", 0)
+                            total_pages = value.get("total_pages", 0)
+
+                            self.info_label.configure(
+                                text=f"解析中 - 已获取 {total_parsed}/{total_estimated} 章 (第{current_page}/{total_pages}页)"
+                            )
+                        return
+
+                    # 处理流式解析完成信号
+                    if key.endswith("_complete"):
+                        if self._book_data and isinstance(self._book_data, dict):
+                            final_total = value.get("_final_total", 0)
+                            chapters = value.get("chapters", [])
+                            if chapters:
+                                self._book_data["chapters"] = chapters
+                                self._book_data["_streaming"] = False
+
+                            title = value.get("title", "")
+                            author = value.get("author", "")
+
+                            self.info_label.configure(
+                                text=f"{title} - {author} (共{final_total}章)"
+                            )
+                        return
+
+                    # 常规全量结果（兼容非流式模式）
                     self._book_data = value
                     if key == "huanting_book":
                         self._current_site = "huanting"
                     else:
                         self._current_site = "ting13"
+
+                    # 如果是流式模式的首批数据，显示特殊状态
+                    if isinstance(value, dict) and value.get("_streaming"):
+                        estimated = value.get("_total_estimated", "?")
+                        actual = len(value.get("chapters", []))
+                        title = value.get("title", "")
+                        self.info_label.configure(
+                            text=f"{title} (首批{actual}章/估算共{estimated}章) - 可开始下载"
+                        )
                 elif kind == "rotate_request":
                     reason = msg[1] if len(msg) > 1 else ""
                     self._app.handle_rotate_request(self._tab_name, reason)
@@ -471,27 +512,22 @@ class TaskTab:
             messagebox.showwarning("提示", "请先输入书籍 URL")
             return
 
-        site = detect_site(url)
-        if site == "huanting":
-            _ht = HuantingSource()
-            url_type = _ht.detect_url_type(url)
-            if url_type == "unknown":
-                messagebox.showerror("错误", "无法识别的 URL 格式")
-                return
-            self._current_site = "huanting"
-        elif site == "ting13":
-            url_type = detect_url_type(url)
-            if url_type == "unknown":
-                messagebox.showerror("错误", "无法识别的 URL 格式")
-                return
-            if url_type == "play":
-                self._book_data = None
-                self._current_site = "ting13"
-                self.info_label.configure(text="单集播放链接，可直接点击「开始下载」")
-                return
-            self._current_site = "ting13"
-        else:
+        source = find_source(url)
+        if not source:
             messagebox.showerror("错误", "无法识别的 URL，支持 ting13.cc / ting22.com")
+            return
+
+        url_type = source.detect_url_type(url)
+        if url_type == "unknown":
+            messagebox.showerror("错误", "无法识别的 URL 格式")
+            return
+
+        site = _site_from_source(source)
+        self._current_site = site
+
+        if url_type == "play":
+            self._book_data = None
+            self.info_label.configure(text="单集播放链接，可直接点击「开始下载」")
             return
 
         self._app.save_url_to_history(url)
@@ -514,21 +550,18 @@ class TaskTab:
             messagebox.showwarning("提示", "请先输入书籍 URL")
             return
 
-        site = detect_site(url)
-        if site == "huanting":
-            self._current_site = "huanting"
-            _ht = HuantingSource()
-            url_type = _ht.detect_url_type(url)
-        elif site == "ting13":
-            self._current_site = "ting13"
-            url_type = detect_url_type(url)
-        else:
+        source = find_source(url)
+        if not source:
             messagebox.showerror("错误", "无法识别的 URL")
             return
 
+        url_type = source.detect_url_type(url)
         if url_type == "unknown":
             messagebox.showerror("错误", "无法识别的 URL 格式")
             return
+
+        site = _site_from_source(source)
+        self._current_site = site
 
         self._app.save_url_to_history(url)
 
@@ -536,6 +569,7 @@ class TaskTab:
         start, end = self._get_range()
         headless = self.headless_var.get()
         proxy = self._app.proxy_entry.get().strip()
+        concurrency = int(self.concurrency_var.get())
 
         self._is_downloading = True
         self._ui_set_buttons(True)
@@ -550,6 +584,7 @@ class TaskTab:
             self._app.rotate_enabled,
             self._app.get_rotate_interval(),
             self._book_data,
+            concurrency,
         ))
 
     # ── 停止 ──
@@ -582,7 +617,7 @@ class App(ctk.CTk):
     WINDOW_HEIGHT = 800
 
     ROTATE_COOLDOWN = 30
-    HOMEPAGE_URL = "https://www.ting13.cc/"
+    HOMEPAGE_PLACEHOLDER = "打开网站"
 
     def __init__(self):
         super().__init__()
@@ -618,13 +653,22 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=20, weight="bold"),
         ).grid(row=0, column=0, sticky="w", padx=(0, 12))
 
-        self._home_btn = ctk.CTkButton(
-            header_frame, text="ting13.cc", width=100, height=28,
+        self._home_var = ctk.StringVar(value=self.HOMEPAGE_PLACEHOLDER)
+        site_names = list(self._get_site_options().keys())
+        self._home_menu = ctk.CTkOptionMenu(
+            header_frame,
+            variable=self._home_var,
+            values=site_names,
+            width=110, height=28,
             font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#1a6b0a", hover_color="#145508",
-            command=self._open_homepage,
+            fg_color="#1a6b0a", button_color="#145508",
+            button_hover_color="#0d4a06",
+            dropdown_fg_color="#2a2a2a",
+            dropdown_text_color="#d4d4d4",
+            dropdown_hover_color="#3a3a3a",
+            command=self._on_homepage_selected,
         )
-        self._home_btn.grid(row=0, column=1, padx=(0, 8))
+        self._home_menu.grid(row=0, column=1, padx=(0, 8))
 
         self._history_var = ctk.StringVar(value="历史记录")
         self._history_menu = ctk.CTkOptionMenu(
@@ -750,8 +794,21 @@ class App(ctk.CTk):
 
     # ── 导航栏 ──
 
-    def _open_homepage(self):
-        webbrowser.open(self.HOMEPAGE_URL)
+    def _get_site_options(self) -> Dict[str, str]:
+        """从已注册的 Source 插件中获取 {站点名: 主页URL} 映射"""
+        options = {}
+        for cls in get_source_classes():
+            if cls.base_url and cls.names:
+                options[cls.names[0]] = cls.base_url
+        return options
+
+    def _on_homepage_selected(self, name: str):
+        if name == self.HOMEPAGE_PLACEHOLDER:
+            return
+        url = self._get_site_options().get(name)
+        if url:
+            webbrowser.open(url)
+        self._home_var.set(self.HOMEPAGE_PLACEHOLDER)
 
     def _on_history_selected(self, display: str):
         url = self.url_history.url_for_display(display)
@@ -878,7 +935,7 @@ class App(ctk.CTk):
             return
 
         self._log_to_current("[*] 正在检测 DNS 状态...")
-        if _is_dns_poisoned("www.ting13.cc"):
+        if is_dns_poisoned("www.ting13.cc"):
             real_ip = resolve_via_doh("www.ting13.cc")
             self._log_to_current(f"[!] DNS 被污染! 真实 IP: {real_ip}")
         else:
@@ -941,14 +998,9 @@ class App(ctk.CTk):
             try:
                 with sync_playwright() as pw:
                     launch_kwargs: Dict = {"headless": False}
-                    if _is_frozen():
-                        base = _get_bundled_base()
-                        chrome_exe = os.path.join(
-                            base, "ms-playwright", "chromium-1208",
-                            "chrome-win64", "chrome.exe"
-                        )
-                        if os.path.isfile(chrome_exe):
-                            launch_kwargs["executable_path"] = chrome_exe
+                    chrome_exe = get_chrome_exe_path()
+                    if chrome_exe:
+                        launch_kwargs["executable_path"] = chrome_exe
                     if get_proxy():
                         launch_kwargs["proxy"] = {"server": get_proxy()}
                     browser = pw.chromium.launch(**launch_kwargs)

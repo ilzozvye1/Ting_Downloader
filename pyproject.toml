@@ -1,0 +1,43 @@
+[project]
+name = "ting13"
+version = "4.3.0"
+description = "有声小说下载器 — 支持 ting13.cc / ting22.com (huanting.cc)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "requests>=2.31",
+    "urllib3>=2.0",
+    "lxml>=5.0",
+    "cssselect>=1.2",
+    "playwright>=1.40",
+    "customtkinter>=5.2",
+]
+
+[project.optional-dependencies]
+captcha = [
+    "curl_cffi>=0.6",
+    "numpy>=1.26",
+    "opencv-python-headless>=4.9",
+]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+ting13-cli = "ting13.apps.cli.main:main"
+ting13-gui = "ting13.apps.gui.main:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
